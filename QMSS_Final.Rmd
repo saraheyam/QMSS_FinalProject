@@ -30,13 +30,15 @@ invisible(library(dplyr))
 invisible(library(stringr))
 invisible(library(tidyr))
 invisible(library(dmm))
+invisible(library(pcaPP))
 ```
 
 
 ```{r}
-dr_scores <- read.csv("full_doctor_scoring.csv", sep = ",", na = "NA")
-head(dr_scores)
+# Professional.Enrollment.ID is non-predictive, same with PAC_id
+dr_scores <- read.csv("full_doctor_scoring.csv", sep = ",", na = c("NA", "N/A"))
 ```
+
 
 Potential Methods for Binary Classification:  
 Using overall MIPS for individuals where MIPS>= 75, the positive payment adjustment threshold.
@@ -52,8 +54,54 @@ Using overall MIPS for individuals where MIPS>= 75, the positive payment adjustm
     + tree model if we can make it work? (Single Tree, Random Forest, Boosting, Dbarts???)
     + PLSDA or LDA
     + nnet or MARS
-* PCA to look at similar variables? like an inverted version
-    
+* PCA to look at similar variables?  
+
+```{r}
+# remove majority of missingness by removing each task type -- though check how many are just preventative care
+no_tasks <- dr_scores[c(1:23, 57)] 
+
+# add a "UKN" for unknown category
+no_tasks$Credential <- factor(no_tasks$Credential, levels = c(levels(dr_scores$Credential), "UKN"))
+no_tasks$Credential[is.na(no_tasks$Credential)] <- "UKN"
+
+# -1 for not reporting individual ACI Score (NA value)
+no_tasks$ACI_Score_Dr[is.na(no_tasks$ACI_Score_Dr)] <- -1
+
+head(no_tasks)
+```
+
+### PCA to Explore Correlation of Variables
+
+An initial PCA analysis to look understand how rows cluster based on the column variables. This is without considering the binary classifying aspect of MIPS >= 75,, and is just to understand some of the structure of the scores in the data. 
+
+```{r}
+# still minor missingness in Graduation Year and Quality Score
+numerics <- no_tasks[, c(8, 10:11, 15:18, 20:24)] %>% na.omit(.)
+
+pr_out <- PCAproj(numerics, scale = sd)
+par(mar = c(5, 4, 3, 3) + 0.1, las = 1)
+biplot(pr_out, scale = 0, cex = c(0.6, 0.8)) # visualization of any immediate outliers and the variables
+biplot(pr_out, scale = 0, cex = c(0.13, 0.8)) # clusters within the observations visible
+```
+
+As mostly expected, the MIPS scores for the hospital organizations that each doctor works at are more correlated to each other than they are to the MIPS scores for each individual doctor. While the number of secondary specialties each doctor has is more correlated to the individual doctor MIPS scores, the group practice ID is more correlated to the organization scores. This is also fairly in line with our expectations that measures for the practice organization would cluster separately from the measures for the individual doctors. Interestingly, the average performance for an individual doctor across task categories seems to be more correlated to the organization scores though. Since performance is measured though individual patient reporting, their experience with the organization itself may be taken into consideration and bias their score, even if the doctor-patient interaction itself was positive.  
+  
+In the second PCA plot, with the observation labels less cluttered from size, we see that there seem to be distinct clusters of observations.  This would indicate groupings within the observations with distinguishing measurement characteristics. Many points do deviate from the groupings themselves. Still, overall, it doesn't appear that any observations seems like a major outlier, as seen in the first plot.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
