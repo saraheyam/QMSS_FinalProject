@@ -25,12 +25,17 @@ __Approach/Methods:__ Supervised learning for binary classification utilizing th
 
 
 
-```{r, include = F}
+```{r, message = F, collapse = T, warning = F}
 invisible(library(dplyr))
 invisible(library(stringr))
 invisible(library(tidyr))
 invisible(library(dmm))
 invisible(library(pcaPP))
+invisible(library(caret))
+```
+
+```{r}
+set.seed(70856775)
 ```
 
 
@@ -57,31 +62,32 @@ Using overall MIPS for individuals where MIPS>= 75, the positive payment adjustm
 * PCA to look at similar variables?  
 
 ```{r}
-# remove majority of missingness by removing each task type -- though check how many are just preventative care
+# remove majority of missingness by removing each task type
 no_tasks <- dr_scores[c(1:23, 57)] 
 
 # add a "UKN" for unknown category
-no_tasks$Credential <- factor(no_tasks$Credential, levels = c(levels(dr_scores$Credential), "UKN"))
+no_tasks$Credential <- factor(no_tasks$Credential, 
+                              levels = c(levels(dr_scores$Credential), "UKN"))
 no_tasks$Credential[is.na(no_tasks$Credential)] <- "UKN"
 
 # -1 for not reporting individual ACI Score (NA value)
 no_tasks$ACI_Score_Dr[is.na(no_tasks$ACI_Score_Dr)] <- -1
-
-head(no_tasks)
 ```
 
 ### PCA to Explore Correlation of Variables
 
 An initial PCA analysis to look understand how rows cluster based on the column variables. This is without considering the binary classifying aspect of MIPS >= 75,, and is just to understand some of the structure of the scores in the data. 
 
-```{r}
+```{r, cache = T, fig.height = 4, fig.width = 4}
 # still minor missingness in Graduation Year and Quality Score
 numerics <- no_tasks[, c(8, 10:11, 15:18, 20:24)] %>% na.omit(.)
-
 pr_out <- PCAproj(numerics, scale = sd)
 par(mar = c(5, 4, 3, 3) + 0.1, las = 1)
-biplot(pr_out, scale = 0, cex = c(0.6, 0.8)) # visualization of any immediate outliers and the variables
-biplot(pr_out, scale = 0, cex = c(0.13, 0.8)) # clusters within the observations visible
+
+# visualization of any immediate outliers and the variables
+biplot(pr_out, scale = 0, cex = c(0.6, 0.8))
+# clusters within the observations visible
+biplot(pr_out, scale = 0, cex = c(0.13, 0.8)) 
 ```
 
 As mostly expected, the MIPS scores for the hospital organizations that each doctor works at are more correlated to each other than they are to the MIPS scores for each individual doctor. While the number of secondary specialties each doctor has is more correlated to the individual doctor MIPS scores, the group practice ID is more correlated to the organization scores. This is also fairly in line with our expectations that measures for the practice organization would cluster separately from the measures for the individual doctors. Interestingly, the average performance for an individual doctor across task categories seems to be more correlated to the organization scores though. Since performance is measured though individual patient reporting, their experience with the organization itself may be taken into consideration and bias their score, even if the doctor-patient interaction itself was positive.  
@@ -89,7 +95,103 @@ As mostly expected, the MIPS scores for the hospital organizations that each doc
 In the second PCA plot, with the observation labels less cluttered from size, we see that there seem to be distinct clusters of observations.  This would indicate groupings within the observations with distinguishing measurement characteristics. Many points do deviate from the groupings themselves. Still, overall, it doesn't appear that any observations seems like a major outlier, as seen in the first plot.
 
 
+#### Prepare dataset for training/testing
 
+
+```{r}
+# we do not expect PAC_id or Proefssional.Enrollment.ID to be predictive
+# create factor for classification prediction (Individual Doctor MIPS Score >= 75)
+# Score_source_org has no variance -- they're all group
+
+no_tasks <- na.omit(no_tasks)[, c(3:13, 15:ncol(no_tasks))]
+no_tasks$MIPS75_Dr <- factor(no_tasks$MIPS_Score_Dr >= 75.0, 
+                             levels = c(TRUE, FALSE), 
+                             labels = c("yes", "no"))
+head(no_tasks)
+```
+
+```
+splitter <- createDataPartition(no_tasks$MIPS75_Dr, 
+                                p = 0.5, list = F)
+train_split <- no_tasks[splitter, ]
+test_split <- no_tasks[-splitter, ]
+
+in_train <- createDataPartition(train_split$MIPS75_Dr, 
+                                p = 0.6, list = F)
+training <- train_split[in_train, ]
+testing <- train_split[-in_train, ]
+```
+
+```{r}
+in_train <- createDataPartition(no_tasks$MIPS75_Dr,
+                                p = 0.8, list = F)
+training <- no_tasks[in_train, ]
+testing <- no_tasks[-in_train, ]
+```
+
+
+
+```{r, message = F, collapse = T, warning = F}
+# even splits of factors with several levels
+# returns padded resampled version though!
+
+schools <- as.character(sort(unique(no_tasks$Medical.school.name)))
+primary <- as.character(sort(unique(no_tasks$Primary.specialty)))
+creds <- as.character(sort(unique(no_tasks$Credential)))
+group_fctr <- c(schools, primary, creds) 
+
+in_train <- sapply(group_fctr, FUN = function(st) {
+  task_st <- filter(no_tasks, (
+    (Primary.specialty == st) | (Medical.school.name == st) | (Credential == st)))
+  if (nrow(task_st) == 1) return(1L)
+  return(createDataPartition(task_st$MIPS75_Dr, 
+                             p = 0.8, list = FALSE))
+})
+names(in_train) <- group_fctr
+train_fctr <- bind_rows(lapply(group_fctr, FUN = function(st) {
+  tasks_st <- filter(no_tasks, (
+    (Primary.specialty == st) | (Medical.school.name == st) | (Credential == st)))
+  x <- in_train[[st]]
+  return(tasks_st[x, , drop = FALSE])
+}))
+test_fctr <- bind_rows(lapply(group_fctr, FUN = function(st) {
+  task_st <- filter(no_tasks, (
+    (Primary.specialty == st) | (Medical.school.name == st) | (Credential == st)))
+  x <- in_train[[st]]
+  return(task_st[-x, , drop = FALSE])
+}))
+```
+
+
+
+
+### Let's test with a basic linear model:
+
+```{r}
+# Using the factor stratified dataset
+ols <- lm(MIPS75_Dr == "yes" ~ ., 
+          data = train_fctr[, c(3:5, 7:8, 12:15, 17:22)])
+yhat <- predict(ols, 
+                newdata = test_fctr[, c(3:5, 7:8, 12:15, 17:22)])
+z_ols <- factor(yhat > 0.5, levels = c(TRUE, FALSE), 
+                labels = c("yes", "no"))
+confusionMatrix(z_ols, 
+                reference = test_fctr[, c(3:5, 7:8, 12:15, 17:22)]$MIPS75_Dr)
+```
+
+
+
+```{r}
+# testing without stratification, med school name, primary speciality
+ols <- lm(MIPS75_Dr == "yes" ~ ., 
+          data = training[, c(3:4, 8, 12:15, 17:22)])
+yhat <- predict(ols, 
+                newdata = testing[, c(3:4, 8, 12:15, 17:22)])
+z_ols <- factor(yhat > 0.5, levels = c(TRUE, FALSE), 
+                labels = c("yes", "no"))
+confusionMatrix(z_ols, 
+                reference = testing[, c(3:4, 8, 12:15, 17:22)]$MIPS75_Dr)
+```
 
 
 
