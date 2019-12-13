@@ -127,6 +127,9 @@ in_train <- createDataPartition(no_tasks$MIPS75_Dr,
                                 p = 0.8, list = F)
 training <- no_tasks[in_train, ]
 testing <- no_tasks[-in_train, ]
+
+training <- training[, c(3:4, 8, 12:15, 17:22)]
+testing <- testing[, c(3:4, 8, 12:15, 17:22)]
 ```
 
 
@@ -160,6 +163,9 @@ test_fctr <- bind_rows(lapply(group_fctr, FUN = function(st) {
   x <- in_train[[st]]
   return(task_st[-x, , drop = FALSE])
 }))
+
+train_fctr <- train_fctr[, c(3:5, 7:8, 12:15, 17:22)]
+test_fctr <- test_fctr[, c(3:5, 7:8, 12:15, 17:22)]
 ```
 
 
@@ -169,39 +175,122 @@ test_fctr <- bind_rows(lapply(group_fctr, FUN = function(st) {
 
 ```{r}
 # Using the factor stratified dataset
-ols <- lm(MIPS75_Dr == "yes" ~ ., 
-          data = train_fctr[, c(3:5, 7:8, 12:15, 17:22)])
-yhat <- predict(ols, 
-                newdata = test_fctr[, c(3:5, 7:8, 12:15, 17:22)])
-z_ols <- factor(yhat > 0.5, levels = c(TRUE, FALSE), 
+ols_strat <- lm(MIPS75_Dr == "yes" ~ ., data = train_fctr)
+yhat_strat <- predict(ols_strat, newdata = test_fctr)
+z_ols_strat <- factor(yhat_strat > 0.5, levels = c(TRUE, FALSE), 
                 labels = c("yes", "no"))
-confusionMatrix(z_ols, 
-                reference = test_fctr[, c(3:5, 7:8, 12:15, 17:22)]$MIPS75_Dr)
+confusionMatrix(z_ols_strat, reference = test_fctr$MIPS75_Dr)
 ```
 
 
 
 ```{r}
 # testing without stratification, med school name, primary speciality
-ols <- lm(MIPS75_Dr == "yes" ~ ., 
-          data = training[, c(3:4, 8, 12:15, 17:22)])
-yhat <- predict(ols, 
-                newdata = testing[, c(3:4, 8, 12:15, 17:22)])
+ols <- lm(MIPS75_Dr == "yes" ~ ., data = training)
+yhat <- predict(ols, newdata = testing)
 z_ols <- factor(yhat > 0.5, levels = c(TRUE, FALSE), 
                 labels = c("yes", "no"))
-confusionMatrix(z_ols, 
-                reference = testing[, c(3:4, 8, 12:15, 17:22)]$MIPS75_Dr)
+confusionMatrix(z_ols, reference = testing$MIPS75_Dr)
+```
+
+
+```{r}
+calibration(MIPS75_Dr ~ yhat, data = testing) %>%
+  plot(., main = "Without School or Primary Specialty Name")
+
+calibration(MIPS75_Dr ~ yhat_strat, data = test_fctr) %>%
+  plot(., main = "With Stratification by Factor")
+```
+
+The stratified model seems to fit a bit better compared to the model trained and tested without medical school name or primary speciality. This is especially for bins of lower probabilities, such as 0.5, which is fairly expected, as a larger number of observations from stratificaion and including medical school name and primary specialty would likely provide much more information. These factors, medical school name and primary specialty, probably strongly influence scores. Both the doctor's medical school name and the types of diseases and treatments could bias how scorers evaluate. For example, a scorer may be predisposed to giving a higher score if the doctor being evaluated attended a more prestigious school. Certain fields of medicine, such as surgery or oncology, could incur much higher costs or have higher mortality rates compared to fields such as family medicine, skewing factors of the final MIPS score, such as cost and quality scoring. Still, even with fairly good accuracies, we can see that the model isn't calibrated in an ideal manner.
+
+
+#### GLM Models -- Logit and GLMnet Penalized
+
+Resplit to only put half in each to make functions run a bit faster
+```{r}
+in_train <- createDataPartition(no_tasks$MIPS75_Dr,
+                                p = 0.6, list = F)
+training <- no_tasks[in_train, ]
+testing <- no_tasks[-in_train, ]
+
+training <- training[, c(3:4, 8, 12:15, 17:22)]
+testing <- testing[, c(3:4, 8, 12:15, 17:22)]
+
 ```
 
 
 
+```{r, message = F, warning = F}
+# even splits of factors with several levels
+# returns padded resampled version though!
+
+schools <- as.character(sort(unique(no_tasks$Medical.school.name)))
+primary <- as.character(sort(unique(no_tasks$Primary.specialty)))
+creds <- as.character(sort(unique(no_tasks$Credential)))
+group_fctr <- c(schools, primary, creds) 
+
+in_train <- sapply(group_fctr, FUN = function(st) {
+  task_st <- filter(no_tasks, (
+    (Primary.specialty == st) | (Medical.school.name == st) | (Credential == st)))
+  if (nrow(task_st) == 1) return(1L)
+  return(createDataPartition(task_st$MIPS75_Dr, 
+                             p = 0.5, list = FALSE))
+})
+names(in_train) <- group_fctr
+train_fctr <- bind_rows(lapply(group_fctr, FUN = function(st) {
+  tasks_st <- filter(no_tasks, (
+    (Primary.specialty == st) | (Medical.school.name == st) | (Credential == st)))
+  x <- in_train[[st]]
+  return(tasks_st[x, , drop = FALSE])
+}))
+test_fctr <- bind_rows(lapply(group_fctr, FUN = function(st) {
+  task_st <- filter(no_tasks, (
+    (Primary.specialty == st) | (Medical.school.name == st) | (Credential == st)))
+  x <- in_train[[st]]
+  return(task_st[-x, , drop = FALSE])
+}))
+
+train_fctr <- train_fctr[, c(3:5, 7:8, 12:15, 17:22)] %>% distinct(.)
+test_fctr <- test_fctr[, c(3:5, 7:8, 12:15, 17:22)] %>% distinct(.)
+```
 
 
+```{r, message = F, warning = F, cache = T}
+logit_strata <- glm(MIPS75_Dr ~ ., data = train_fctr, family = binomial(link = "logit"))
+z_strata <- predict(logit_strata, newdata = test_fctr, type = "response") > 0.5
+z_strata <- factor(z_strata, levels = c(TRUE, FALSE), labels = c("no", "yes"), order = T)
+confusionMatrix(z_strata, test_fctr$MIPS75_Dr)
+
+# too many factors just not in both training and testing, level-wise
+
+#logit <- glm(MIPS75_Dr ~ ., data = training, family = binomial(link = "logit"))
+#z <- predict(logit, newdata = testing, type = "response") > 0.5
+#z <- factor(z, levels = c(TRUE, FALSE), labels = c("no", "yes"), order = T)
+#confusionMatrix(z, testing$MIPS75_Dr)
+```
 
 
+## Wow glm fit way better than I thought so quickly
 
 
+```{r, message = F, warning = F}
+# glmnet
+ctrl <- trainControl(method = "cv", number = 3)
 
+enet_strata <- train(formula(logit_strata), data = train_fctr, method = "glmnet",
+              trControl = ctrl, tuneLength = 10)
+enet_hat_strata <- predict(enet_strata, newdata = test_fctr)
+confusionMatrix(enet_hat_strata, reference = test_fctr$MIPS75_Dr)
+
+
+#enet <- train(formula(logit), data = training, method = "glmnet",
+#              trControl = ctrl, tuneLength = 10)
+#enet_hat <- predict(enet, newdata = testing)
+#confusionMatrix(enet_hat, reference = testing$MIPS75_Dr)
+
+
+```
 
 
 
