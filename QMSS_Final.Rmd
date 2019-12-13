@@ -13,12 +13,16 @@ Looking at individual physician scores:
 * Performance by measure category
 * Organization MIPS
 
-Possible problems to solve:  
- 
+Possible project:  
 * Prediction of whether to see a physician based on threshold
 * Predict physician score based on all factors (predict MIPS?)
     + classification of whether you should go to a doctor based on MIPS score
     + train on several classification methods to analyze best approach for this data
+    
+__Question/Problem:__ How can we better help patients assess and find doctors, where the scoring and rating come in a format not easily accessible or understandable by the average individual?  
+  
+__Approach/Methods:__ Supervised learning for binary classification utilizing the MIPS as a target with other physician scoring methods as predictors (which we know some of the metrics are direct factors of the individual MIPS scoring, such as the IA, ACI, and Quality category scorings). Potential methods outlined below, including generalized linear models and tree methods.
+
 
 
 ```{r, include = F}
@@ -47,6 +51,7 @@ Using overall MIPS for individuals where MIPS>= 75, the positive payment adjustm
     + glm logit model with polynomials?
     + tree model if we can make it work? (Single Tree, Random Forest, Boosting, Dbarts???)
     + PLSDA or LDA
+    + nnet or MARS
 * PCA to look at similar variables? like an inverted version
     
 
