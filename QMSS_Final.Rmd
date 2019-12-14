@@ -74,6 +74,8 @@ no_tasks$Credential[is.na(no_tasks$Credential)] <- "UKN"
 no_tasks$ACI_Score_Dr[is.na(no_tasks$ACI_Score_Dr)] <- -1
 ```
 
+
+
 ### PCA to Explore Correlation of Variables
 
 An initial PCA analysis to look understand how rows cluster based on the column variables. This is without considering the binary classifying aspect of MIPS >= 75,, and is just to understand some of the structure of the scores in the data. 
@@ -107,8 +109,40 @@ no_tasks <- na.omit(no_tasks)[, c(3:13, 15:ncol(no_tasks))]
 no_tasks$MIPS75_Dr <- factor(no_tasks$MIPS_Score_Dr >= 75.0, 
                              levels = c(TRUE, FALSE), 
                              labels = c("yes", "no"))
+
+# too many levels for partitioning separately
+no_tasks$Prim.Schl <- interaction(no_tasks$Primary.specialty, 
+                                       no_tasks$Medical.school.name, 
+                                       sep = ":")
+
+# variables we expect to be predictive
+preds <- c("last_name", "first_name", "Gender", "Graduation.year", 
+           "Prim.Schl", "Credential", "Num.Secondaries", "Quality_Score_Org", 
+           "ACI_Score_Org", "IA_Score_Org", "MIPS_Score_Org", 
+           "Quality_Score_Dr", "ACI_Score_Dr", "IA_Score_Dr", 
+           "MIPS_Score_Dr", "avg.perf", "MIPS75_Dr")
+no_tasks <- no_tasks[, preds]
+
 head(no_tasks)
+
+
 ```
+
+```{r}
+remain <- group_by(no_tasks, Prim.Schl) %>% 
+  summarise(., count = n()) %>%
+  filter(., count > 10) %>%
+  .$Prim.Schl 
+
+no_tasks <- subset(no_tasks, Prim.Schl %in% remain)
+#no_tasks
+```
+
+
+```{r}
+no_tasks
+```
+
 
 ```
 splitter <- createDataPartition(no_tasks$MIPS75_Dr, 
@@ -123,13 +157,18 @@ testing <- train_split[-in_train, ]
 ```
 
 ```{r}
-in_train <- createDataPartition(no_tasks$MIPS75_Dr,
-                                p = 0.8, list = F)
+in_train <- createDataPartition(no_tasks$Prim.Schl,
+                               p = 0.6, list = F)
+
 training <- no_tasks[in_train, ]
 testing <- no_tasks[-in_train, ]
 
-training <- training[, c(3:4, 6, 8, 12:15, 17:22)]
-testing <- testing[, c(3:4, 6, 8, 12:15, 17:22)]
+#training <- training[, c(3:4, 6, 8, 12:15, 17:22)]
+#testing <- testing[, c(3:4, 6, 8, 12:15, 17:22)]
+```
+
+```{r}
+interaction(no_tasks$Primary.specialty, no_tasks$Credential, no_tasks$Medical.school.name, sep = ":")
 ```
 
 
