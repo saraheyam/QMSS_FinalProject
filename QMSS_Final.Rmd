@@ -128,8 +128,8 @@ in_train <- createDataPartition(no_tasks$MIPS75_Dr,
 training <- no_tasks[in_train, ]
 testing <- no_tasks[-in_train, ]
 
-training <- training[, c(3:4, 8, 12:15, 17:22)]
-testing <- testing[, c(3:4, 8, 12:15, 17:22)]
+training <- training[, c(3:4, 6, 8, 12:15, 17:22)]
+testing <- testing[, c(3:4, 6, 8, 12:15, 17:22)]
 ```
 
 
@@ -164,14 +164,29 @@ test_fctr <- bind_rows(lapply(group_fctr, FUN = function(st) {
   return(task_st[-x, , drop = FALSE])
 }))
 
-train_fctr <- train_fctr[, c(3:5, 7:8, 12:15, 17:22)]
-test_fctr <- test_fctr[, c(3:5, 7:8, 12:15, 17:22)]
+train_fctr <- train_fctr[, c(3:8, 12:15, 17:22)]
+test_fctr <- test_fctr[, c(3:8, 12:15, 17:22)]
 ```
 
 
 
 
 ### Let's test with a basic linear model:
+
+
+# We should include scaling for numericals where it doesn't need to be splined or kept as is?  
+Num.secondaries, Quality score, IA score is 0-40 so maybe this too, avg.perf 
+
+
+```{r}
+# continous measurements can be scaled
+# ACI is really a mixture of discrete and continuous 
+
+pp_names <- c("Num.Secondaries", "Quality_Score_Org", "IA_Score_Org", 
+              "Quality_Score_Dr", "IA_Score_Dr", "avg.perf")
+pp <- list(center = pp_names, scale = pp_names)
+
+```
 
 ```{r}
 # Using the factor stratified dataset
@@ -204,20 +219,24 @@ calibration(MIPS75_Dr ~ yhat_strat, data = test_fctr) %>%
 
 The stratified model seems to fit a bit better compared to the model trained and tested without medical school name or primary speciality. This is especially for bins of lower probabilities, such as 0.5, which is fairly expected, as a larger number of observations from stratificaion and including medical school name and primary specialty would likely provide much more information. These factors, medical school name and primary specialty, probably strongly influence scores. Both the doctor's medical school name and the types of diseases and treatments could bias how scorers evaluate. For example, a scorer may be predisposed to giving a higher score if the doctor being evaluated attended a more prestigious school. Certain fields of medicine, such as surgery or oncology, could incur much higher costs or have higher mortality rates compared to fields such as family medicine, skewing factors of the final MIPS score, such as cost and quality scoring. Still, even with fairly good accuracies, we can see that the model isn't calibrated in an ideal manner.
 
-
 #### GLM Models -- Logit and GLMnet Penalized
 
 Resplit to only put half in each to make functions run a bit faster
 ```{r}
+# Cannot use non-cross-validated 
+# must remove creds/school name/primary speciality 
+# [4, 5, 7]
+
 in_train <- createDataPartition(no_tasks$MIPS75_Dr,
                                 p = 0.6, list = F)
 training <- no_tasks[in_train, ]
 testing <- no_tasks[-in_train, ]
 
-training <- training[, c(3:4, 8, 12:15, 17:22)]
-testing <- testing[, c(3:4, 8, 12:15, 17:22)]
+training <- training[, c(3, 6,  8, 12:15, 17:22)]
+testing <- testing[, c(3, 6, 8, 12:15, 17:22)]
 
 ```
+
 
 
 
@@ -235,7 +254,7 @@ in_train <- sapply(group_fctr, FUN = function(st) {
     (Primary.specialty == st) | (Medical.school.name == st) | (Credential == st)))
   if (nrow(task_st) == 1) return(1L)
   return(createDataPartition(task_st$MIPS75_Dr, 
-                             p = 0.5, list = FALSE))
+                             p = 0.6, list = FALSE))
 })
 names(in_train) <- group_fctr
 train_fctr <- bind_rows(lapply(group_fctr, FUN = function(st) {
@@ -251,8 +270,9 @@ test_fctr <- bind_rows(lapply(group_fctr, FUN = function(st) {
   return(task_st[-x, , drop = FALSE])
 }))
 
-train_fctr <- train_fctr[, c(3:5, 7:8, 12:15, 17:22)] %>% distinct(.)
-test_fctr <- test_fctr[, c(3:5, 7:8, 12:15, 17:22)] %>% distinct(.)
+
+train_fctr <- train_fctr[, c(3:8, 12:15, 17:22)] %>% distinct(.)
+test_fctr <- test_fctr[, c(3:8, 12:15, 17:22)] %>% distinct(.)
 ```
 
 
@@ -264,34 +284,96 @@ confusionMatrix(z_strata, test_fctr$MIPS75_Dr)
 
 # too many factors just not in both training and testing, level-wise
 
-#logit <- glm(MIPS75_Dr ~ ., data = training, family = binomial(link = "logit"))
-#z <- predict(logit, newdata = testing, type = "response") > 0.5
-#z <- factor(z, levels = c(TRUE, FALSE), labels = c("no", "yes"), order = T)
-#confusionMatrix(z, testing$MIPS75_Dr)
+logit <- glm(MIPS75_Dr ~ ., data = training, family = binomial(link = "logit"))
+z <- predict(logit, newdata = testing, type = "response") > 0.5
+z <- factor(z, levels = c(TRUE, FALSE), labels = c("no", "yes"), order = T)
+confusionMatrix(z, testing$MIPS75_Dr)
 ```
 
 
 ## Wow glm fit way better than I thought so quickly
 
 
-```{r, message = F, warning = F}
-# glmnet
+```{r, message = F, warning = F, cache = T}
+# glmnet PENALIZATION
 ctrl <- trainControl(method = "cv", number = 3)
 
 enet_strata <- train(formula(logit_strata), data = train_fctr, method = "glmnet",
-              trControl = ctrl, tuneLength = 10)
+              trControl = ctrl, tuneLength = 10, preProcess = pp)
 enet_hat_strata <- predict(enet_strata, newdata = test_fctr)
 confusionMatrix(enet_hat_strata, reference = test_fctr$MIPS75_Dr)
 
 
-#enet <- train(formula(logit), data = training, method = "glmnet",
-#              trControl = ctrl, tuneLength = 10)
-#enet_hat <- predict(enet, newdata = testing)
-#confusionMatrix(enet_hat, reference = testing$MIPS75_Dr)
+enet <- train(formula(logit), data = training, method = "glmnet",
+              trControl = ctrl, tuneLength = 10, preProcess = pp)
+enet_hat <- predict(enet, newdata = testing)
+confusionMatrix(enet_hat, reference = testing$MIPS75_Dr)
 
 
 ```
 
+
+#### Linear Models with Polynomials and Splines -- how linear is our data? Do splines make it better? WHY IS IT LEARNING SO WELL ALREADY
+
+```
+colnames(no_tasks)
+
+# potential polynomials
+- Num.Secondaries
+
+
+
+# potential splines
+- ACI -- spline at -1:0, 0:50, 50:
+- raw MIPS -- spline at 0:30, 30:75, 75:
+```
+```{r}
+poly_cut <- c("Num.Secondaries", "ACI_Score_Dr", "AID_Score_Org", "MIPS_Score_Dr", "MIPS_Score_Org")
+
+colnames(training)
+ 
+
+
+colnames(train_fctr)
+```
+
+
+```{r, message = F, warning = F, cache = T}
+
+# with polynomials and cuts
+
+poly_strat <- glm(MIPS75_Dr ~ ., data = train_fctr, family = binomial(link = "logit"))
+poly_z_strat <- predict(poly_strat, newdata = test_fctr, type = "response") > 0.5
+poly_z_strat <- factor(poly_z_strat, levels = c(TRUE, FALSE), labels = c("no", "yes"), order = T)
+confusionMatrix(poly_z_strata, test_fctr$MIPS75_Dr)
+
+# too many factors just not in both training and testing, level-wise
+
+poly <- glm(MIPS75_Dr ~ ., data = training, family = binomial(link = "logit"))
+poly_z <- predict(poly, newdata = testing, type = "response") > 0.5
+poly_z <- factor(poly_z, levels = c(TRUE, FALSE), labels = c("no", "yes"), order = T)
+confusionMatrix(poly_z, testing$MIPS75_Dr)
+```
+
+```{r, message = F, warning = F, cache = T}
+# glmnet PENALIZATION
+# with polynomials and uts
+
+ctrl <- trainControl(method = "cv", number = 3)
+
+poly_el_strat <- train(formula(poly_strata), data = train_fctr, method = "glmnet",
+              trControl = ctrl, tuneLength = 10, preProcess = pp)
+poly_yh_strat <- predict(poly_el_strat, newdata = test_fctr)
+confusionMatrix(poly_yh_strat, reference = test_fctr$MIPS75_Dr)
+
+
+poly_el <- train(formula(poly), data = training, method = "glmnet",
+              trControl = ctrl, tuneLength = 10, preProcess = pp)
+poly_yh <- predict(poly_el, newdata = testing)
+confusionMatrix(poly_yh, reference = testing$MIPS75_Dr)
+
+
+```
 
 
 
