@@ -17,23 +17,6 @@ __Question/Problem:__ How can we better help patients assess and find doctors, w
   
 __Approach/Methods:__ Supervised learning for binary classification utilizing the MIPS as a target with other physician scoring methods as predictors (which we know some of the metrics are direct factors of the individual MIPS scoring, such as the IA, ACI, and Quality category scorings). Potential methods outlined below, including generalized linear models and tree methods.
 
-
-
-```{r, message = F, collapse = T, warning = F}
-suppressPackageStartupMessages(library(dplyr))
-suppressPackageStartupMessages(library(stringr))
-suppressPackageStartupMessages(library(tidyr))
-suppressPackageStartupMessages(library(dmm))
-suppressPackageStartupMessages(library(pcaPP))
-suppressPackageStartupMessages(library(caret))
-suppressPackageStartupMessages(library(splines))
-```
-
-```{r}
-set.seed(70856775)
-```
-
-
 Potential Methods for Binary Classification:  
 Using overall MIPS for individuals where MIPS>= 75, the positive payment adjustment threshold.
 
@@ -49,6 +32,19 @@ Using overall MIPS for individuals where MIPS>= 75, the positive payment adjustm
     + PLSDA or LDA
     + nnet or MARS
 
+```{r, message = F, collapse = T, warning = F}
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(dmm))
+suppressPackageStartupMessages(library(pcaPP))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(splines))
+```
+
+```{r}
+set.seed(70856775)
+```
 
 ```{r}
 # Professional.Enrollment.ID is non-predictive, same with PAC_id
@@ -154,9 +150,6 @@ The stratified model seems to fit a bit better compared to the model trained and
 
 #### GLM Models -- Logit and GLMnet Penalized
 
-# We should include scaling for numericals where it doesn't need to be splined or kept as is?  
-Num.secondaries, Quality score, IA score is 0-40 so maybe this too, avg.perf 
-
 ```{r}
 # continous measurements can be scaled
 # ACI is really a mixture of discrete and continuous 
@@ -167,7 +160,7 @@ pp_names <- c("Num.Secondaries", "Quality_Score_Org",
 pp <- list(center = pp_names, scale = pp_names)
 ```
 
-Resplit to only put half in each to make functions run a bit faster
+
 ```{r}
 in_train <- createDataPartition(no_tasks$MIPS75_Dr,
                                 p = 0.6, list = F)
@@ -240,4 +233,55 @@ confusionMatrix(poly_yh, reference = testing$MIPS75_Dr)
 ## DBARTS/trees and then NNET?
 
 
+###### SO THIS CELL TAKES THE DATA, MANIPULATES FACTORS FOR PREDICTION AND PARITIONING. IF YOU WANT TO CHANGE WHICH CATEGORIES YOU WANT TO PREDICT ON, IT SHOULD PROBABLY BE IN HERE, USING THE "PREDS" VARIABLE DEFINITION.
+```{r}
+# Professional.Enrollment.ID is non-predictive, same with PAC_id
+dr_scores <- read.csv("full_doctor_scoring.csv", 
+                      sep = ",", na = c("NA", "N/A"))
+# remove majority of missingness by removing each task type
+no_tasks <- dr_scores[c(1:23, 57)] 
+# add a "UKN" for unknown category
+no_tasks$Credential <- factor(no_tasks$Credential, 
+                              levels = c(levels(dr_scores$Credential), 
+                                         "UKN"))
+no_tasks$Credential[is.na(no_tasks$Credential)] <- "UKN"
+# -1 for not reporting individual ACI Score (NA value)
+no_tasks$ACI_Score_Dr[is.na(no_tasks$ACI_Score_Dr)] <- -1
+
+no_tasks <- na.omit(no_tasks)[, c(3:13, 15:ncol(no_tasks))]
+no_tasks$MIPS75_Dr <- factor(no_tasks$MIPS_Score_Dr >= 75.0, 
+                             levels = c(TRUE, FALSE), 
+                             labels = c("yes", "no"))
+
+# too many levels for partitioning separately
+no_tasks$Prim.Schl <- interaction(no_tasks$Primary.specialty, 
+                                  no_tasks$Medical.school.name, 
+                                  sep = ":", drop = TRUE)
+
+# variables we expect to be predictive
+preds <- c("Gender", "Prim.Schl", "MIPS_Score_Org",
+           "Num.Secondaries", "Quality_Score_Org", 
+           "IA_Score_Org", "IA_Score_Dr", "Graduation.year", 
+           "ACI_Score_Dr", "Quality_Score_Dr", 
+           "avg.perf", "MIPS75_Dr")
+no_tasks <- no_tasks[, preds]
+
+
+remain <- group_by(no_tasks, Prim.Schl) %>% 
+  summarise(., count = n()) %>%
+  filter(., count > 50) %>%
+  .$Prim.Schl 
+
+no_tasks <- subset(no_tasks, Prim.Schl %in% remain)
+```
+
+
+##### THIS IS THE TRAINING PARTITIONING CELL WE'LL WANT TO USE FOR THE DBARTS AND NNET STUFF
+
+```{r}
+in_train <- createDataPartition(no_tasks$MIPS75_Dr,
+                                p = 0.6, list = F)
+training <- no_tasks[in_train, ]
+testing <- no_tasks[-in_train, ]
+```
 
