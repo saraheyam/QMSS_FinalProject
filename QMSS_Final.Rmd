@@ -1,9 +1,14 @@
 ---
-title: "QMSS Final Project"
+title: "A Predictive Analysis of Doctor Performance Evaluation Data under the Merit-based Incentive Payment System (MIPS)"
+author:
+- "Xintao Ding (xd2222)" 
+- "Sarah Yam (sy2806)"
 output:
   pdf_document: default
   html_notebook: default
 ---
+
+# explain mips basically?
 
 The Physician Compare website was created by the Centers for Medicare & Medicaid Services (CMS) in December 2010 as required by the Affordable Care Act (ACA) of 2010 to help patients assess and find doctors and hospitals. This dataset contains the information supplied to patients via that website, including patient satisfaction surveys and performance scores across over 100 metrics.
 
@@ -26,11 +31,16 @@ Using overall MIPS for individuals where MIPS>= 75, the positive payment adjustm
     + MIPS < 30: Negative Payment Adjustment
 * Predictive MIPS >= 75, essentially.
 * Methods to try:  
+    + PCA to explore relationship of numeric variables 
+    + PCA to explor clustering of observations
     + glmnet for binary classification (elastic model/penalized logit)
     + glm logit model with polynomials?
     + tree model if we can make it work? (Single Tree, Random Forest, Boosting, Dbarts???)
     + PLSDA or LDA
     + nnet or MARS
+    
+# explain why some of these methods?
+# explain data -- cite where it came from 
 
 ```{r, message = F, collapse = T, warning = F}
 suppressPackageStartupMessages(library(dplyr))
@@ -101,12 +111,14 @@ no_tasks$Prim.Schl <- interaction(no_tasks$Primary.specialty,
                                   no_tasks$Medical.school.name, 
                                   sep = ":", drop = TRUE)
 
+
+
 # variables we expect to be predictive
 preds <- c("Gender", "Prim.Schl", "MIPS_Score_Org",
            "Num.Secondaries", "Quality_Score_Org", 
            "IA_Score_Org", "IA_Score_Dr", "Graduation.year", 
            "ACI_Score_Dr", "Quality_Score_Dr", 
-           "avg.perf", "MIPS75_Dr")
+           "avg.perf", "MIPS75_Dr", "MIPS_Score_Dr")
 no_tasks <- no_tasks[, preds]
 
 
@@ -114,12 +126,41 @@ remain <- group_by(no_tasks, Prim.Schl) %>%
   summarise(., count = n()) %>%
   filter(., count > 50) %>%
   .$Prim.Schl 
-
 no_tasks <- subset(no_tasks, Prim.Schl %in% remain)
+
+numerical <-  no_tasks[, c("MIPS_Score_Org", "Num.Secondaries", 
+                          "Quality_Score_Org", "IA_Score_Org", 
+                          "IA_Score_Dr", "Graduation.year", 
+                          "ACI_Score_Dr", "Quality_Score_Dr", 
+                          "avg.perf",  "MIPS_Score_Dr")]
+
+no_tasks <- no_tasks[, c("Gender", "Prim.Schl", "MIPS_Score_Org",
+           "Num.Secondaries", "Quality_Score_Org", "IA_Score_Org", 
+           "IA_Score_Dr", "Graduation.year", "ACI_Score_Dr", 
+           "Quality_Score_Dr", "avg.perf", "MIPS75_Dr")]
 ```
+
+
 
 ## Maybe explore PCA again for the things we are directly looking at and using the data that we've trimmed down to
 
+```{r, cache = T}
+
+pca_out <- PCAproj(numerical, scale = sd)
+
+par(mar = c(5, 4, 3, 3) + 0.1, las = 1)
+
+# visualization of any immediate outliers and the variables
+biplot(pca_out, scale = 0, cex = c(0.6, 0.8))
+# clusters within the observations visible
+biplot(pca_out, scale = 0, cex = c(0.13, 0.8)) 
+```
+
+When comparing just the numeric components of the preditors we will be training and testing on, scores measuring performance of individual doctors cluster apart from scores measuring performance of health care organizations. This makes sense as the criteria for evaluating an organization are likely more related to each other than they would be to the criteria for evaluating individual health care providers. Included in the doctor score cluster is the MIPS Score for individual dcotors, which is target variable we are trying to predict. The MIPS Score for individual doctors though, still seems to be fairly correlated with the organization-based scores. Overall though, we don't really appear to see any major outliers from the observations.
+
+Similar to the original PCA plot as well, the average performance seems more correlated to the organization scores than the actual invidividual doctor scores, despite it being a measurement of average performance for individual doctors. Performance though, was measured across a large variety of different tasks, including e-Prescribing, Preventative Care and Screening, Diabetic Care, Nuclear Medicine, Patient Portal Access. Given the vast range of topics covered, it's apparent that many of these tasks, such as online patient portal access or disease screening, are more dependent on services provided and resources of the organization, rather than the individual caregiver.  
+
+The plot with smaller points again also shows us that the observations do a appear to group in distinctive patterns still, hopefully indicating that some of the underlying structure and characteristics of the data were still retained after further processing of the data.
 
 
 ```{r, message = F, warning = F}
@@ -145,11 +186,7 @@ calibration(MIPS75_Dr ~ yhat, data = testing) %>%
   plot(.)
 ```
 
-# ADJUST ANALYSIS FOR CHANGES IN FACTORIZATION
-
-The stratified model seems to fit a bit better compared to the model trained and tested without medical school name or primary speciality. This is especially for bins of lower probabilities, such as 0.5, which is fairly expected, as a larger number of observations from stratificaion and including medical school name and primary specialty would likely provide much more information. These factors, medical school name and primary specialty, probably strongly influence scores. Both the doctor's medical school name and the types of diseases and treatments could bias how scorers evaluate. For example, a scorer may be predisposed to giving a higher score if the doctor being evaluated attended a more prestigious school. Certain fields of medicine, such as surgery or oncology, could incur much higher costs or have higher mortality rates compared to fields such as family medicine, skewing factors of the final MIPS score, such as cost and quality scoring. Still, even with fairly good accuracies, we can see that the model isn't calibrated in an ideal manner.
-
--- has much more extreme fit, where things with > 0.5 probability of success have
+Where, an ideally calibrated model should see 20% of observations being successful that have a predicted probability of about 0.2 if it finds that there's a 0.2 probability of success, our model seems more extreme, in almost a binary manner. In this case, when our models finds less than 0.5 probability of success, the proportion seen of observations being successful is far lower than that probability of success. In fact, none of the observation with a predicted probability greater than 0 and less than ~0.4 are successful. On the other hand, we see that that the proportion of observations being successful is far larger than the probability of success when the model says there's greater than ~0.6 probability of success. At a 0.8 probability of success, we actually see nearly 100% of those observations being successful. While the accuracy from this model is still quite good (not entirely unexpected since our dataset is fairly large and comprehensive), our data does not appear to quite fit an exact linear model, and would likely perform better with more flexible models. 
 
 #### GLM Models -- Logit and GLMnet Penalized
 
@@ -182,9 +219,6 @@ confusionMatrix(z, testing$MIPS75_Dr)
 ```
 
 
-## Wow glm fit way better than I thought so quickly
-
-
 ```{r, message = F, warning = F, cache = T}
 # glmnet PENALIZATION
 ctrl <- trainControl(method = "cv", number = 3)
@@ -195,8 +229,12 @@ enet_hat <- predict(enet, newdata = testing)
 confusionMatrix(enet_hat, reference = testing$MIPS75_Dr)
 ```
 
+# Analysis of GLM models, with and without penalization. Between each other and compared to linear.
 
-#### Linear Models with Polynomials and Splines -- how linear is our data? Do splines make it better? WHY IS IT LEARNING SO WELL ALREADY
+
+#### Linear Models with Polynomials and Splines -- how linear is our data? Do splines make it better? 
+
+# explain why the splines and polynomials  
 
 Potential polynomials:  
 
@@ -233,63 +271,7 @@ confusionMatrix(poly_yh, reference = testing$MIPS75_Dr)
 ```
 
 
-## DBARTS/trees and then NNET?
-
-
-###### SO THIS CELL TAKES THE DATA, MANIPULATES FACTORS FOR PREDICTION AND PARITIONING. IF YOU WANT TO CHANGE WHICH CATEGORIES YOU WANT TO PREDICT ON, IT SHOULD PROBABLY BE IN HERE, USING THE "PREDS" VARIABLE DEFINITION.
-```{r}
-# Professional.Enrollment.ID is non-predictive, same with PAC_id
-dr_scores <- read.csv("full_doctor_scoring.csv", 
-                      sep = ",", na = c("NA", "N/A"))
-# remove majority of missingness by removing each task type
-no_tasks <- dr_scores[c(1:23, 57)] 
-# add a "UKN" for unknown category
-no_tasks$Credential <- factor(no_tasks$Credential, 
-                              levels = c(levels(dr_scores$Credential), 
-                                         "UKN"))
-no_tasks$Credential[is.na(no_tasks$Credential)] <- "UKN"
-# -1 for not reporting individual ACI Score (NA value)
-no_tasks$ACI_Score_Dr[is.na(no_tasks$ACI_Score_Dr)] <- -1
-
-no_tasks <- na.omit(no_tasks)[, c(3:13, 15:ncol(no_tasks))]
-no_tasks$MIPS75_Dr <- factor(no_tasks$MIPS_Score_Dr >= 75.0, 
-                             levels = c(TRUE, FALSE), 
-                             labels = c("yes", "no"))
-
-# too many levels for partitioning separately
-no_tasks$Prim.Schl <- interaction(no_tasks$Primary.specialty, 
-                                  no_tasks$Medical.school.name, 
-                                  sep = ":", drop = TRUE)
-
-# variables we expect to be predictive
-preds <- c("Gender", "Prim.Schl", "MIPS_Score_Org",
-           "Num.Secondaries", "Quality_Score_Org", 
-           "IA_Score_Org", "IA_Score_Dr", "Graduation.year", 
-           "ACI_Score_Dr", "Quality_Score_Dr", 
-           "avg.perf", "MIPS75_Dr")
-no_tasks <- no_tasks[, preds]
-
-
-remain <- group_by(no_tasks, Prim.Schl) %>% 
-  summarise(., count = n()) %>%
-  filter(., count > 50) %>%
-  .$Prim.Schl 
-
-no_tasks <- subset(no_tasks, Prim.Schl %in% remain)
-```
-
-
-##### THIS IS THE TRAINING PARTITIONING CELL WE'LL WANT TO USE FOR THE DBARTS AND NNET STUFF
-
-```{r}
-in_train <- createDataPartition(no_tasks$MIPS75_Dr,
-                                p = 0.6, list = F)
-training <- no_tasks[in_train, ]
-testing <- no_tasks[-in_train, ]
-```
-
-
-#### DBarts and trees
+#### Tree Methods
 
 ```{r}
 # training = 3587 yes, 1793 no (yes = .66)
@@ -302,12 +284,14 @@ testing <- no_tasks[-in_train, ]
 #### Basic Single Tree Model on the same predictors
 ```{r}
 one_tree <- train(MIPS75_Dr ~ ., data = training, method = "rpart2", 
-                  tuneLength = 10, trControl = ctrl)
+                  tuneLength = 10, trControl = ctrl, preProcess = pp)
 plot(one_tree)
 confusionMatrix(testing$MIPS75_Dr, predict(one_tree, newdata = testing))
 ```
 
-## dbart method
+# analysis of graph?
+
+#### DBarts: Bayesian Additive Regression Trees
 ```{r}
 bart_out <- bart2(MIPS75_Dr == "yes" ~ ., data = training, 
                   test = testing, k = 5, base = 0.4, 
@@ -318,21 +302,28 @@ confusionMatrix(factor(
   reference = testing$MIPS75_Dr)
 ```
 
+# analysis comparison of trees, difference in trees (no need to interactions, etc because learned)
 
-## NNET
-```{r}
+
+
+#### NNET
+```{r, cache = T}
+nnetGrid <- expand.grid(.decay = c(0, 0.01, .01),
+                        .size = c(1:3))
 nn <- train(MIPS75_Dr ~ . -Prim.Schl, data = training, method = "nnet", 
-                  tuneLength = 10, trControl = ctrl, preProcess = c("center", "scale"), trace = FALSE)
+            tuneLength = 10, trControl = ctrl, tuneGrid = nnetGrid,
+            preProcess = pp, trace = FALSE)
 
 ## prim.schl was taken out as it is a zero-variance predictor
 
 confusionMatrix(testing$MIPS75_Dr, predict(nn, newdata = testing))
 ```
 
-## MARS
+#### MARS
 ```{r message = F, warning = F,cache=T }
+marsGrid <- expand.grid(.degree = 1:3, .nprune = 1:10)
 MARS <- train(MIPS75_Dr ~ . -Prim.Schl, data = training, method = "earth", 
-                  tuneLength = 10, trControl = ctrl, preProcess = c("center", "scale"), trace = FALSE)
+                  tuneLength = 10, trControl = ctrl, preProcess = pp, trace = FALSE)
 ## prim.schl was taken out as it is a zero-variance predictor
 
 confusionMatrix(testing$MIPS75_Dr, predict(MARS, newdata = testing))
@@ -341,7 +332,10 @@ confusionMatrix(testing$MIPS75_Dr, predict(MARS, newdata = testing))
 ```
 
 
+# final nnet/MARS analysis
 
+# overview of models and what worked best. why? 
+# what did this tell us and how did this help solve problem?
 
 
 
