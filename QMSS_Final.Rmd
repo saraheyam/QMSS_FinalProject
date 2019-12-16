@@ -320,7 +320,7 @@ confusionMatrix(testing$MIPS75_Dr, predict(nn, newdata = testing))
 ```
 
 #### MARS
-```{r message = F, warning = F,cache=T }
+```{r message = F, warning = F,cache = T }
 marsGrid <- expand.grid(.degree = 1:3, .nprune = 1:10)
 MARS <- train(MIPS75_Dr ~ . -Prim.Schl, data = training, method = "earth", 
                   tuneLength = 10, trControl = ctrl, preProcess = pp, trace = FALSE)
@@ -328,8 +328,10 @@ MARS <- train(MIPS75_Dr ~ . -Prim.Schl, data = training, method = "earth",
 
 confusionMatrix(testing$MIPS75_Dr, predict(MARS, newdata = testing))
 
-# perfecrt separation happened, doesn't matter in an earth context since earth doesn't use t-value and other statistics that will be unrealiable for subsequent inference. Mostly likely happens in a cross-validation model since we are looking at smaller datasets. 
+
 ```
+
+"perfecrt separation happened, doesn't matter in an earth context since earth doesn't use t-value and other statistics that will be unrealiable for subsequent inference. Mostly likely happens in a cross-validation model since we are looking at smaller datasets"  
 
 
 # final nnet/MARS analysis
