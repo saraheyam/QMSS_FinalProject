@@ -8,7 +8,20 @@ output:
   html_notebook: default
 ---
 
-# explain mips basically?
+# Introduction  
+
+* what did we do
+* data used? methods done?
+* purpose of doing this
+* potential challenges  
+
+__Question/Problem:__ How can we better help patients assess and find doctors, where the scoring and rating come in a format not easily accessible or understandable by the average individual?  
+  
+__Approach/Methods:__ Supervised learning for binary classification utilizing the MIPS as a target with other physician scoring methods as predictors (which we know some of the metrics are direct factors of the individual MIPS scoring, such as the IA, ACI, and Quality category scorings). Potential methods outlined below, including generalized linear models and tree methods.
+
+# Data
+### explain mips basically?
+### explain data -- cite where it came from 
 
 The Physician Compare website was created by the Centers for Medicare & Medicaid Services (CMS) in December 2010 as required by the Affordable Care Act (ACA) of 2010 to help patients assess and find doctors and hospitals. This dataset contains the information supplied to patients via that website, including patient satisfaction surveys and performance scores across over 100 metrics.
 
@@ -18,9 +31,11 @@ Looking at individual physician scores:
 * Performance by measure category
 * Organization MIPS
 
-__Question/Problem:__ How can we better help patients assess and find doctors, where the scoring and rating come in a format not easily accessible or understandable by the average individual?  
-  
-__Approach/Methods:__ Supervised learning for binary classification utilizing the MIPS as a target with other physician scoring methods as predictors (which we know some of the metrics are direct factors of the individual MIPS scoring, such as the IA, ACI, and Quality category scorings). Potential methods outlined below, including generalized linear models and tree methods.
+Data explanation:  
+
+* real valued? boolean? factors? missingness?
+
+# Methods
 
 Potential Methods for Binary Classification:  
 Using overall MIPS for individuals where MIPS>= 75, the positive payment adjustment threshold.
@@ -39,8 +54,11 @@ Using overall MIPS for individuals where MIPS>= 75, the positive payment adjustm
     + PLSDA or LDA
     + nnet or MARS
     
-# explain why some of these methods?
-# explain data -- cite where it came from 
+### explain why some of these methods?
+
+# include preprocessing portions?  
+# conclusion
+
 
 ```{r, message = F, collapse = T, warning = F}
 suppressPackageStartupMessages(library(dplyr))
@@ -74,7 +92,7 @@ no_tasks$ACI_Score_Dr[is.na(no_tasks$ACI_Score_Dr)] <- -1
 
 ### PCA to Explore Correlation of Variables
 
-An initial PCA analysis to look understand how rows cluster based on the column variables. This is without considering the binary classifying aspect of MIPS >= 75,, and is just to understand some of the structure of the scores in the data. 
+An initial PCA analysis to look understand how rows cluster based on the column variables. This is without considering the binary classifying aspect of MIPS >= 75, and is just to understand some of the structure of the scores in the data. 
 
 ```{r, cache = T}
 # still minor missingness in Graduation Year and Quality Score
@@ -93,13 +111,13 @@ As mostly expected, the MIPS scores for the hospital organizations that each doc
 In the second PCA plot, with the observation labels less cluttered from size, we see that there seem to be distinct clusters of observations.  This would indicate groupings within the observations with distinguishing measurement characteristics. Many points do deviate from the groupings themselves. Still, overall, it doesn't appear that any observations seems like a major outlier, as seen in the first plot.
 
 
-#### Prepare dataset for training/testing
+### Processing data for training
 
 
 ```{r}
 # we do not expect PAC_id or Proefssional.Enrollment.ID to be predictive
 # create factor for classification prediction (Individual Doctor MIPS Score >= 75)
-# Score_source_org has no variance -- they're all group
+# Score_source_org has no variance -- they're all 1 group
 
 no_tasks <- na.omit(no_tasks)[, c(3:13, 15:ncol(no_tasks))]
 no_tasks$MIPS75_Dr <- factor(no_tasks$MIPS_Score_Dr >= 75.0, 
@@ -140,14 +158,12 @@ no_tasks <- no_tasks[, c("Gender", "Prim.Schl", "MIPS_Score_Org",
            "Quality_Score_Dr", "avg.perf", "MIPS75_Dr")]
 ```
 
+### PCA to Explore Correlation of Predictors  
 
-
-## Maybe explore PCA again for the things we are directly looking at and using the data that we've trimmed down to
+Of the original numerical predictors, we trimmed down to the MIPS, Quality, IA, and ACI scores for both the doctors and organization. We also retained the number of secondary specialties and an individual's average performance. From this, we hoped to visualize any changes in predictor correlations once some of the variables are removed.
 
 ```{r, cache = T}
-
 pca_out <- PCAproj(numerical, scale = sd)
-
 par(mar = c(5, 4, 3, 3) + 0.1, las = 1)
 
 # visualization of any immediate outliers and the variables
@@ -172,7 +188,10 @@ testing <- no_tasks[-in_train, ]
 ```
 
 
-### Let's test with a basic linear model:
+### Linear models as a baseline: 
+
+We initially fit a more basic linear model and explored calibration as a baseline to understand the differences and benefits of different supervised learning methods on our data.
+
 
 ```{r}
 # testing without stratification, med school name, primary speciality
@@ -181,14 +200,13 @@ yhat <- predict(ols, newdata = testing)
 z_ols <- factor(yhat > 0.5, levels = c(TRUE, FALSE), 
                 labels = c("yes", "no"))
 confusionMatrix(z_ols, reference = testing$MIPS75_Dr)
-
 calibration(MIPS75_Dr ~ yhat, data = testing) %>%
-  plot(.)
+  plot(., main = "Linear Model Calibrations")
 ```
 
 Where, an ideally calibrated model should see 20% of observations being successful that have a predicted probability of about 0.2 if it finds that there's a 0.2 probability of success, our model seems more extreme, in almost a binary manner. In this case, when our models finds less than 0.5 probability of success, the proportion seen of observations being successful is far lower than that probability of success. In fact, none of the observation with a predicted probability greater than 0 and less than ~0.4 are successful. On the other hand, we see that that the proportion of observations being successful is far larger than the probability of success when the model says there's greater than ~0.6 probability of success. At a 0.8 probability of success, we actually see nearly 100% of those observations being successful. While the accuracy from this model is still quite good (not entirely unexpected since our dataset is fairly large and comprehensive), our data does not appear to quite fit an exact linear model, and would likely perform better with more flexible models. 
 
-#### GLM Models -- Logit and GLMnet Penalized
+### GLM Models -- Logit and GLMnet Penalized -- Binary Logistic Regression
 
 ```{r}
 # continous measurements can be scaled
@@ -211,12 +229,15 @@ testing <- no_tasks[-in_train, ]
 ```{r, message = F, warning = F}
 logit <- glm(MIPS75_Dr ~ ., data = training, 
              family = binomial(link = "logit"))
-z <- predict(logit, newdata = testing, 
+no_penalty <- predict(logit, newdata = testing, 
+             type = "response") 
+logit_hat <- predict(logit, newdata = testing, 
              type = "response") > 0.5
-z <- factor(z, levels = c(TRUE, FALSE), 
+logit_hat <- factor(logit_hat, levels = c(TRUE, FALSE), 
             labels = c("no", "yes"), order = T)
-confusionMatrix(z, testing$MIPS75_Dr)
+confusionMatrix(logit_hat, testing$MIPS75_Dr)
 ```
+
 
 
 ```{r, message = F, warning = F, cache = T}
@@ -226,24 +247,26 @@ enet <- train(formula(logit), data = training,
               method = "glmnet", trControl = ctrl, 
               tuneLength = 10, preProcess = pp)
 enet_hat <- predict(enet, newdata = testing)
+penalty <- predict(enet, newdata = testing, type = "prob")$yes
 confusionMatrix(enet_hat, reference = testing$MIPS75_Dr)
 ```
 
-# Analysis of GLM models, with and without penalization. Between each other and compared to linear.
+```{r}
+# Non-penality takes reciprocal
+# issue with factor order reversal
+calibration(MIPS75_Dr ~ (1 - no_penalty) + 
+              penalty, data = testing) %>%
+  plot(., main = "Generalized Linear Model Calibrations")
+```
 
 
-#### Linear Models with Polynomials and Splines -- how linear is our data? Do splines make it better? 
+Where linear models restrains the errors to a normal distribution, the generalized linear model is an extension that can accomodate the target variable following different distributions. In this case, we used logistic regression, where our target variable was categorical instead. Given the increase in model performance under both penalized and unpenalized generalized linear models, we can infer that the extension to a binomial error distribution improved the performance of our model. Considering that we're predicting whether a doctor's MIPS score met the positive payment adjustmend threshold, it makese sense then the binary logistic regression better fit the data. Interestingly, though, implementing penalization didn't always improve the performance, and if it didn't, it wasn't improved as muched as was expected. Still, compared to the linear models, both generalized linear models are far better calibrated, which was what we originally speculated due to the more flexible model.
 
-# explain why the splines and polynomials  
 
-Potential polynomials:  
+### Linear Models with Polynomials and Splines  
 
-- Num.Secondaries
+We continued to explore the speculation that our data is better fit by a more complex, non-linear model by implementing splines and polynomial relationships. Specifically, we applied a second degree polynomial to the number of secondary specialities an individual doctor has. Our reasoning stems from the majority of individuals having at most one secondary specialty, while a small group of individuals have four to five secondary specialities. For splines, we focused on the ACI Score and MIPS Score variables, which have various interpretations. For the ACI Score (Advancing Care Information), a score above 0 indicates the clinicial reported the ACI category, a score of -1 indicates it went unreported, and scores of 50 or greater indicate the clinician acheived the base score for the ACI category (<50 being unsatifactory). For the MIPS Score for organizations, ranges of scores correlate to either a negative (0 - 30), no (30 - 75), or positive (75 - 100) payment adjustment plan.
 
-Potential splines:  
-
-- ACI: spline at -1:0, 0:50, 50:
-- raw MIPS: spline at 0:30, 30:75, 75:
 
 ```{r, message = F, warning = F}
 # with polynomials and splines
@@ -253,6 +276,8 @@ poly <- glm(MIPS75_Dr ~ . +
               poly(Num.Secondaries, degree = 2), 
             data = training, 
             family = binomial(link = "logit"))
+poly_hat <- predict(poly, newdata = testing, 
+                    type = "response")
 poly_z <- predict(poly, newdata = testing, 
                   type = "response") > 0.5
 poly_z <- factor(poly_z, levels = c(TRUE, FALSE), 
@@ -267,8 +292,16 @@ poly_el <- train(formula(poly), data = training,
                  method = "glmnet", trControl = ctrl, 
                  tuneLength = 10, preProcess = pp)
 poly_yh <- predict(poly_el, newdata = testing)
+elastic_hat <- predict(poly_el, newdata = testing, type = "prob")$yes
 confusionMatrix(poly_yh, reference = testing$MIPS75_Dr)
 ```
+
+```{r}
+calibration(MIPS75_Dr ~ (1 - poly_hat) + 
+              elastic_hat, data = testing) %>%
+  plot(., main = "GLM with Polynomials and Splines Calibrations")
+```
+
 
 
 #### Tree Methods
