@@ -228,34 +228,6 @@ testing <- no_tasks[-in_train, ]
 ```
 
 
-```{r}
-logit <- glm(MIPS75_Dr ~ (.)^2, data = training, 
-             family = binomial(link = "logit"))
-no_penalty <- predict(logit, newdata = testing, 
-             type = "response") 
-logit_hat <- predict(logit, newdata = testing, 
-             type = "response") > 0.5
-logit_hat <- factor(logit_hat, levels = c(TRUE, FALSE), 
-            labels = c("no", "yes"), order = T)
-confusionMatrix(logit_hat, testing$MIPS75_Dr)
-
-
-ctrl <- trainControl(method = "cv", number = 3)
-enet <- train(formula(logit), data = training, 
-              method = "glmnet", trControl = ctrl, 
-              tuneLength = 10, preProcess = pp)
-enet_hat <- predict(enet, newdata = testing)
-penalty <- predict(enet, newdata = testing, type = "prob")$yes
-confusionMatrix(enet_hat, reference = testing$MIPS75_Dr)
-
-calibration(MIPS75_Dr ~ (1 - no_penalty) + 
-              penalty, data = testing) %>%
-  plot(., main = "Generalized Linear Model Calibrations")
-```
-
-
-
-
 ```{r, message = F, warning = F}
 logit <- glm(MIPS75_Dr ~ ., data = training, 
              family = binomial(link = "logit"))
@@ -366,6 +338,7 @@ confusionMatrix(factor(
 ```
 
 # analysis comparison of trees, difference in trees (no need to interactions, etc because learned)
+We hope to improve the tree method with Bayesian additive regression trees (BARS). However, when we try BARS, it didn't necessarily increase the accuracy or balanced accuracy. 
 
 
 
@@ -394,6 +367,8 @@ confusionMatrix(testing$MIPS75_Dr, predict(MARS, newdata = testing))
 
 ```
 
+Multivariate adaptive regression helps to show the contribution of each preditor individually. When we run MARS, perfecrt separation happened, doesn't matter in an earth context since earth doesn't use t-value and other statistics that will be unrealiable for subsequent inference. Mostly likely happens in a cross-validation model since we are looking at smaller datasets.  
+
 "perfecrt separation happened, doesn't matter in an earth context since earth doesn't use t-value and other statistics that will be unrealiable for subsequent inference. Mostly likely happens in a cross-validation model since we are looking at smaller datasets"  
 
 
@@ -405,6 +380,388 @@ confusionMatrix(testing$MIPS75_Dr, predict(MARS, newdata = testing))
 
 
 
+
+
+
+=======
+---
+title: "A Predictive Analysis of Doctor Performance Evaluation Data under the Merit-based Incentive Payment System (MIPS)"
+author:
+- "Xintao Ding (xd2222)" 
+- "Sarah Yam (sy2806)"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+# Introduction  
+
+* what did we do
+* data used? methods done?
+* purpose of doing this
+* potential challenges  
+
+__Question/Problem:__ How can we better help patients assess and find doctors, where the scoring and rating come in a format not easily accessible or understandable by the average individual?  
+  
+__Approach/Methods:__ Supervised learning for binary classification utilizing the MIPS as a target with other physician scoring methods as predictors (which we know some of the metrics are direct factors of the individual MIPS scoring, such as the IA, ACI, and Quality category scorings). Potential methods outlined below, including generalized linear models and tree methods.
+
+# Data
+### explain mips basically?
+### explain data -- cite where it came from 
+
+The Physician Compare website was created by the Centers for Medicare & Medicaid Services (CMS) in December 2010 as required by the Affordable Care Act (ACA) of 2010 to help patients assess and find doctors and hospitals. This dataset contains the information supplied to patients via that website, including patient satisfaction surveys and performance scores across over 100 metrics.
+
+Looking at individual physician scores:  
+
+* MIPS
+* Performance by measure category
+* Organization MIPS
+
+Data explanation:  
+
+* real valued? boolean? factors? missingness?
+
+# Methods
+
+Potential Methods for Binary Classification:  
+Using overall MIPS for individuals where MIPS>= 75, the positive payment adjustment threshold.
+
+* could apply spline to other MIPS, ACI scorings since they're somewhat discrete in nature.  
+    + ACI >= 0 : clinician reported ACI category
+    + ACI >= 50: clinician achieved base score for ACI
+    + MIPS < 30: Negative Payment Adjustment
+* Predictive MIPS >= 75, essentially.
+* Methods to try:  
+    + PCA to explore relationship of numeric variables 
+    + PCA to explor clustering of observations
+    + glmnet for binary classification (elastic model/penalized logit)
+    + glm logit model with polynomials?
+    + tree model if we can make it work? (Single Tree, Random Forest, Boosting, Dbarts???)
+    + PLSDA or LDA
+    + nnet or MARS
+    
+### explain why some of these methods?
+
+# include preprocessing portions?  
+# conclusion
+
+
+```{r, message = F, collapse = T, warning = F}
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(dmm))
+suppressPackageStartupMessages(library(pcaPP))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(splines))
+suppressPackageStartupMessages(library(dbarts))
+```
+
+```{r}
+set.seed(70856775)
+```
+
+```{r}
+# Professional.Enrollment.ID is non-predictive, same with PAC_id
+dr_scores <- read.csv("full_doctor_scoring.csv", 
+                      sep = ",", na = c("NA", "N/A"))
+# remove majority of missingness by removing each task type
+no_tasks <- dr_scores[c(1:23, 57)] 
+# add a "UKN" for unknown category
+no_tasks$Credential <- factor(no_tasks$Credential, 
+                              levels = c(levels(dr_scores$Credential), 
+                                         "UKN"))
+no_tasks$Credential[is.na(no_tasks$Credential)] <- "UKN"
+# -1 for not reporting individual ACI Score (NA value)
+no_tasks$ACI_Score_Dr[is.na(no_tasks$ACI_Score_Dr)] <- -1
+```
+
+### PCA to Explore Correlation of Variables
+
+An initial PCA analysis to look understand how rows cluster based on the column variables. This is without considering the binary classifying aspect of MIPS >= 75, and is just to understand some of the structure of the scores in the data. 
+
+```{r, cache = T}
+# still minor missingness in Graduation Year and Quality Score
+numerics <- no_tasks[, c(8, 10:11, 15:18, 20:24)] %>% na.omit(.)
+pr_out <- PCAproj(numerics, scale = sd)
+par(mar = c(5, 4, 3, 3) + 0.1, las = 1)
+
+# visualization of any immediate outliers and the variables
+biplot(pr_out, scale = 0, cex = c(0.6, 0.8))
+# clusters within the observations visible
+biplot(pr_out, scale = 0, cex = c(0.13, 0.8)) 
+```
+
+As mostly expected, the MIPS scores for the hospital organizations that each doctor works at are more correlated to each other than they are to the MIPS scores for each individual doctor. While the number of secondary specialties each doctor has is more correlated to the individual doctor MIPS scores, the group practice ID is more correlated to the organization scores. This is also fairly in line with our expectations that measures for the practice organization would cluster separately from the measures for the individual doctors. Interestingly, the average performance for an individual doctor across task categories seems to be more correlated to the organization scores though. Since performance is measured though individual patient reporting, their experience with the organization itself may be taken into consideration and bias their score, even if the doctor-patient interaction itself was positive.  
+  
+In the second PCA plot, with the observation labels less cluttered from size, we see that there seem to be distinct clusters of observations.  This would indicate groupings within the observations with distinguishing measurement characteristics. Many points do deviate from the groupings themselves. Still, overall, it doesn't appear that any observations seems like a major outlier, as seen in the first plot.
+
+
+### Processing data for training
+
+
+```{r}
+# we do not expect PAC_id or Proefssional.Enrollment.ID to be predictive
+# create factor for classification prediction (Individual Doctor MIPS Score >= 75)
+# Score_source_org has no variance -- they're all 1 group
+
+no_tasks <- na.omit(no_tasks)[, c(3:13, 15:ncol(no_tasks))]
+no_tasks$MIPS75_Dr <- factor(no_tasks$MIPS_Score_Dr >= 75.0, 
+                             levels = c(TRUE, FALSE), 
+                             labels = c("yes", "no"))
+
+# too many levels for partitioning separately
+no_tasks$Prim.Schl <- interaction(no_tasks$Primary.specialty, 
+                                  no_tasks$Medical.school.name, 
+                                  sep = ":", drop = TRUE)
+
+
+
+# variables we expect to be predictive
+preds <- c("Gender", "Prim.Schl", "MIPS_Score_Org",
+           "Num.Secondaries", "Quality_Score_Org", 
+           "IA_Score_Org", "IA_Score_Dr", "Graduation.year", 
+           "ACI_Score_Dr", "Quality_Score_Dr", 
+           "avg.perf", "MIPS75_Dr", "MIPS_Score_Dr")
+no_tasks <- no_tasks[, preds]
+
+
+remain <- group_by(no_tasks, Prim.Schl) %>% 
+  summarise(., count = n()) %>%
+  filter(., count > 50) %>%
+  .$Prim.Schl 
+no_tasks <- subset(no_tasks, Prim.Schl %in% remain)
+
+numerical <-  no_tasks[, c("MIPS_Score_Org", "Num.Secondaries", 
+                          "Quality_Score_Org", "IA_Score_Org", 
+                          "IA_Score_Dr", "Graduation.year", 
+                          "ACI_Score_Dr", "Quality_Score_Dr", 
+                          "avg.perf",  "MIPS_Score_Dr")]
+
+no_tasks <- no_tasks[, c("Gender", "Prim.Schl", "MIPS_Score_Org",
+           "Num.Secondaries", "Quality_Score_Org", "IA_Score_Org", 
+           "IA_Score_Dr", "Graduation.year", "ACI_Score_Dr", 
+           "Quality_Score_Dr", "avg.perf", "MIPS75_Dr")]
+```
+
+### PCA to Explore Correlation of Predictors  
+
+Of the original numerical predictors, we trimmed down to the MIPS, Quality, IA, and ACI scores for both the doctors and organization. We also retained the number of secondary specialties and an individual's average performance. From this, we hoped to visualize any changes in predictor correlations once some of the variables are removed.
+
+```{r, cache = T}
+pca_out <- PCAproj(numerical, scale = sd)
+par(mar = c(5, 4, 3, 3) + 0.1, las = 1)
+
+# visualization of any immediate outliers and the variables
+biplot(pca_out, scale = 0, cex = c(0.6, 0.8))
+# clusters within the observations visible
+biplot(pca_out, scale = 0, cex = c(0.13, 0.8)) 
+```
+
+When comparing just the numeric components of the preditors we will be training and testing on, scores measuring performance of individual doctors cluster apart from scores measuring performance of health care organizations. This makes sense as the criteria for evaluating an organization are likely more related to each other than they would be to the criteria for evaluating individual health care providers. Included in the doctor score cluster is the MIPS Score for individual dcotors, which is target variable we are trying to predict. The MIPS Score for individual doctors though, still seems to be fairly correlated with the organization-based scores. Overall though, we don't really appear to see any major outliers from the observations.
+
+Similar to the original PCA plot as well, the average performance seems more correlated to the organization scores than the actual invidividual doctor scores, despite it being a measurement of average performance for individual doctors. Performance though, was measured across a large variety of different tasks, including e-Prescribing, Preventative Care and Screening, Diabetic Care, Nuclear Medicine, Patient Portal Access. Given the vast range of topics covered, it's apparent that many of these tasks, such as online patient portal access or disease screening, are more dependent on services provided and resources of the organization, rather than the individual caregiver.  
+
+The plot with smaller points again also shows us that the observations do a appear to group in distinctive patterns still, hopefully indicating that some of the underlying structure and characteristics of the data were still retained after further processing of the data.
+
+
+```{r, message = F, warning = F}
+in_train <- createDataPartition(no_tasks$Prim.Schl,
+                               p = 0.8, list = F)
+
+training <- no_tasks[in_train, ]
+testing <- no_tasks[-in_train, ]
+```
+
+
+### Linear models as a baseline: 
+
+We initially fit a more basic linear model and explored calibration as a baseline to understand the differences and benefits of different supervised learning methods on our data.
+
+
+```{r}
+# testing without stratification, med school name, primary speciality
+ols <- lm(MIPS75_Dr == "yes" ~ ., data = training)
+yhat <- predict(ols, newdata = testing)
+z_ols <- factor(yhat > 0.5, levels = c(TRUE, FALSE), 
+                labels = c("yes", "no"))
+confusionMatrix(z_ols, reference = testing$MIPS75_Dr)
+calibration(MIPS75_Dr ~ yhat, data = testing) %>%
+  plot(., main = "Linear Model Calibrations")
+```
+
+Where, an ideally calibrated model should see 20% of observations being successful that have a predicted probability of about 0.2 if it finds that there's a 0.2 probability of success, our model seems more extreme, in almost a binary manner. In this case, when our models finds less than 0.5 probability of success, the proportion seen of observations being successful is far lower than that probability of success. In fact, none of the observation with a predicted probability greater than 0 and less than ~0.4 are successful. On the other hand, we see that that the proportion of observations being successful is far larger than the probability of success when the model says there's greater than ~0.6 probability of success. At a 0.8 probability of success, we actually see nearly 100% of those observations being successful. While the accuracy from this model is still quite good (not entirely unexpected since our dataset is fairly large and comprehensive), our data does not appear to quite fit an exact linear model, and would likely perform better with more flexible models. 
+
+### GLM Models -- Logit and GLMnet Penalized -- Binary Logistic Regression
+
+```{r}
+# continous measurements can be scaled
+# ACI is really a mixture of discrete and continuous 
+
+pp_names <- c("Num.Secondaries", "Quality_Score_Org",  
+              "Quality_Score_Dr", "IA_Score_Org", 
+              "IA_Score_Dr", "avg.perf")
+pp <- list(center = pp_names, scale = pp_names)
+```
+
+
+```{r}
+in_train <- createDataPartition(no_tasks$MIPS75_Dr,
+                                p = 0.6, list = F)
+training <- no_tasks[in_train, ]
+testing <- no_tasks[-in_train, ]
+```
+
+```{r, message = F, warning = F}
+logit <- glm(MIPS75_Dr ~ ., data = training, 
+             family = binomial(link = "logit"))
+no_penalty <- predict(logit, newdata = testing, 
+             type = "response") 
+logit_hat <- predict(logit, newdata = testing, 
+             type = "response") > 0.5
+logit_hat <- factor(logit_hat, levels = c(TRUE, FALSE), 
+            labels = c("no", "yes"), order = T)
+confusionMatrix(logit_hat, testing$MIPS75_Dr)
+```
+
+
+
+```{r, message = F, warning = F, cache = T}
+# glmnet PENALIZATION
+ctrl <- trainControl(method = "cv", number = 3)
+enet <- train(formula(logit), data = training, 
+              method = "glmnet", trControl = ctrl, 
+              tuneLength = 10, preProcess = pp)
+enet_hat <- predict(enet, newdata = testing)
+penalty <- predict(enet, newdata = testing, type = "prob")$yes
+confusionMatrix(enet_hat, reference = testing$MIPS75_Dr)
+```
+
+```{r}
+# Non-penality takes reciprocal
+# issue with factor order reversal
+calibration(MIPS75_Dr ~ (1 - no_penalty) + 
+              penalty, data = testing) %>%
+  plot(., main = "Generalized Linear Model Calibrations")
+```
+
+
+Where linear models restrains the errors to a normal distribution, the generalized linear model is an extension that can accomodate the target variable following different distributions. In this case, we used logistic regression, where our target variable was categorical instead. Given the increase in model performance under both penalized and unpenalized generalized linear models, we can infer that the extension to a binomial error distribution improved the performance of our model. Considering that we're predicting whether a doctor's MIPS score met the positive payment adjustmend threshold, it makese sense then the binary logistic regression better fit the data. Interestingly, though, implementing penalization didn't always improve the performance, and if it didn't, it wasn't improved as much as was expected. Still, compared to the linear models, both generalized linear models are far better calibrated, which was what we originally speculated due to the more flexible model.
+
+
+### Linear Models with Polynomials and Splines  
+
+We continued to explore the speculation that our data is better fit by a more complex, non-linear model by implementing splines and polynomial relationships. Specifically, we applied a second degree polynomial to the number of secondary specialities an individual doctor has. Our reasoning stems from the majority of individuals having at most one secondary specialty, while a small group of individuals have four to five secondary specialities. For splines, we focused on the ACI Score and MIPS Score variables, which have various interpretations. For the ACI Score (Advancing Care Information), a score above 0 indicates the clinicial reported the ACI category, a score of -1 indicates it went unreported, and scores of 50 or greater indicate the clinician acheived the base score for the ACI category (<50 being unsatifactory). For the MIPS Score for organizations, ranges of scores correlate to either a negative (0 - 30), no (30 - 75), or positive (75 - 100) payment adjustment plan.
+
+
+```{r, message = F, warning = F}
+# with polynomials and splines
+poly <- glm(MIPS75_Dr ~ . + 
+              bs(MIPS_Score_Org, knots = c(30, 75)) + 
+              bs(ACI_Score_Dr, knots = c(0, 50)) + 
+              poly(Num.Secondaries, degree = 2), 
+            data = training, 
+            family = binomial(link = "logit"))
+poly_hat <- predict(poly, newdata = testing, 
+                    type = "response")
+poly_z <- predict(poly, newdata = testing, 
+                  type = "response") > 0.5
+poly_z <- factor(poly_z, levels = c(TRUE, FALSE), 
+                 labels = c("no", "yes"), order = T)
+confusionMatrix(poly_z, testing$MIPS75_Dr)
+```
+
+```{r, message = F, warning = F, cache = T}
+# glmnet PENALIZATION
+# with polynomials and splines
+poly_el <- train(formula(poly), data = training, 
+                 method = "glmnet", trControl = ctrl, 
+                 tuneLength = 10, preProcess = pp)
+poly_yh <- predict(poly_el, newdata = testing)
+elastic_hat <- predict(poly_el, newdata = testing, type = "prob")$yes
+confusionMatrix(poly_yh, reference = testing$MIPS75_Dr)
+```
+
+```{r}
+calibration(MIPS75_Dr ~ (1 - poly_hat) + 
+              elastic_hat, data = testing) %>%
+  plot(., main = "GLM with Polynomials and Splines Calibrations")
+```
+
+
+
+#### Tree Methods
+
+```{r}
+# training = 3587 yes, 1793 no (yes = .66)
+# testing = 2391 yes, 1194 no (yes = 0.66)
+# at random, it would be gussing 50% right, at only predicting yes or no, it would be guessing 33 or 66% right
+# 80-90% are great trajectories then
+
+```
+
+#### Basic Single Tree Model on the same predictors
+```{r}
+one_tree <- train(MIPS75_Dr ~ ., data = training, method = "rpart2", 
+                  tuneLength = 10, trControl = ctrl, preProcess = pp)
+plot(one_tree)
+plot(one_tree$finalModel)
+text(one_tree$finalModel, pretty = 0)
+confusionMatrix(testing$MIPS75_Dr, predict(one_tree, newdata = testing))
+
+# are we doing tree pruning for this?
+
+```
+
+# analysis of graph?
+
+
+#### DBarts: Bayesian Additive Regression Trees
+```{r}
+bart_out <- bart2(MIPS75_Dr == "yes" ~ ., data = training, 
+                  test = testing, k = 5, base = 0.4, 
+                  power = 1.3, keepTrees =  T)
+confusionMatrix(factor(
+  apply(pnorm(bart_out$yhat.test), 3, mean) > 0.5,
+  levels = c(T, F), labels = levels(testing$MIPS75_Dr)),
+  reference = testing$MIPS75_Dr)
+
+```
+
+# analysis comparison of trees, difference in trees (no need to interactions, etc because learned)
+We hope to improve the tree method with Bayesian additive regression trees (BARS). However, when we try BARS, it didn't necessarily increase the accuracy or balanced accuracy. 
+
+#### NNET
+```{r, cache = T}
+nnetGrid <- expand.grid(.decay = c(0, 0.01, .01),
+                        .size = c(1:3))
+nn <- train(MIPS75_Dr ~ . -Prim.Schl, data = training, method = "nnet", 
+            tuneLength = 10, trControl = ctrl, tuneGrid = nnetGrid,
+            preProcess = pp, trace = FALSE)
+
+## prim.schl was taken out as it is a zero-variance predictor
+
+confusionMatrix(testing$MIPS75_Dr, predict(nn, newdata = testing))
+```
+
+#### MARS
+```{r message = F, warning = F,cache = T }
+marsGrid <- expand.grid(.degree = 1:3, .nprune = 1:10)
+MARS <- train(MIPS75_Dr ~ . -Prim.Schl, data = training, method = "earth", 
+                  tuneLength = 10, trControl = ctrl, preProcess = pp, trace = FALSE)
+## prim.schl was taken out as it is a zero-variance predictor
+
+confusionMatrix(testing$MIPS75_Dr, predict(MARS, newdata = testing))
+
+
+```
+Multivariate adaptive regression helps to show the contribution of each preditor individually. When we run MARS, perfecrt separation happened, doesn't matter in an earth context since earth doesn't use t-value and other statistics that will be unrealiable for subsequent inference. Mostly likely happens in a cross-validation model since we are looking at smaller datasets.  
+
+
+# final nnet/MARS analysis
+
+# overview of models and what worked best. why? 
+# what did this tell us and how did this help solve problem?
 
 
 
