@@ -260,7 +260,7 @@ calibration(MIPS75_Dr ~ (1 - no_penalty) +
 ```
 
 
-Where linear models restrains the errors to a normal distribution, the generalized linear model is an extension that can accomodate the target variable following different distributions. In this case, we used logistic regression, where our target variable was categorical instead. Given the increase in model performance under both penalized and unpenalized generalized linear models, we can infer that the extension to a binomial error distribution improved the performance of our model. Considering that we're predicting whether a doctor's MIPS score met the positive payment adjustmend threshold, it makese sense then the binary logistic regression better fit the data. Interestingly, though, implementing penalization didn't always improve the performance, and if it didn't, it wasn't improved as muched as was expected. Still, compared to the linear models, both generalized linear models are far better calibrated, which was what we originally speculated due to the more flexible model.
+Where linear models restrains the errors to a normal distribution, the generalized linear model is an extension that can accomodate the target variable following different distributions. In this case, we used logistic regression, where our target variable was categorical instead. Given the increase in model performance under both penalized and unpenalized generalized linear models, we can infer that the extension to a binomial error distribution improved the performance of our model. Considering that we're predicting whether a doctor's MIPS score met the positive payment adjustmend threshold, it makese sense then the binary logistic regression better fit the data. Interestingly, though, implementing penalization didn't always improve the performance, and if it didn't, it wasn't improved as much as was expected. Still, compared to the linear models, both generalized linear models are far better calibrated, which was what we originally speculated due to the more flexible model.
 
 
 ### Linear Models with Polynomials and Splines  
@@ -319,10 +319,16 @@ calibration(MIPS75_Dr ~ (1 - poly_hat) +
 one_tree <- train(MIPS75_Dr ~ ., data = training, method = "rpart2", 
                   tuneLength = 10, trControl = ctrl, preProcess = pp)
 plot(one_tree)
+plot(one_tree$finalModel)
+text(one_tree$finalModel, pretty = 0)
 confusionMatrix(testing$MIPS75_Dr, predict(one_tree, newdata = testing))
+
+# are we doing tree pruning for this?
+
 ```
 
 # analysis of graph?
+
 
 #### DBarts: Bayesian Additive Regression Trees
 ```{r}
@@ -333,11 +339,11 @@ confusionMatrix(factor(
   apply(pnorm(bart_out$yhat.test), 3, mean) > 0.5,
   levels = c(T, F), labels = levels(testing$MIPS75_Dr)),
   reference = testing$MIPS75_Dr)
+
 ```
 
 # analysis comparison of trees, difference in trees (no need to interactions, etc because learned)
-
-
+We hope to improve the tree method with Bayesian additive regression trees (BARS). However, when we try BARS, it didn't necessarily increase the accuracy or balanced accuracy. 
 
 #### NNET
 ```{r, cache = T}
@@ -363,8 +369,7 @@ confusionMatrix(testing$MIPS75_Dr, predict(MARS, newdata = testing))
 
 
 ```
-
-"perfecrt separation happened, doesn't matter in an earth context since earth doesn't use t-value and other statistics that will be unrealiable for subsequent inference. Mostly likely happens in a cross-validation model since we are looking at smaller datasets"  
+Multivariate adaptive regression helps to show the contribution of each preditor individually. When we run MARS, perfecrt separation happened, doesn't matter in an earth context since earth doesn't use t-value and other statistics that will be unrealiable for subsequent inference. Mostly likely happens in a cross-validation model since we are looking at smaller datasets.  
 
 
 # final nnet/MARS analysis
