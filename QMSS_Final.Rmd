@@ -194,6 +194,7 @@ We initially fit a more basic linear model and explored calibration as a baselin
 
 
 ```{r}
+# no interactions involved to maintain baseline
 # testing without stratification, med school name, primary speciality
 ols <- lm(MIPS75_Dr == "yes" ~ ., data = training)
 yhat <- predict(ols, newdata = testing)
@@ -225,6 +226,35 @@ in_train <- createDataPartition(no_tasks$MIPS75_Dr,
 training <- no_tasks[in_train, ]
 testing <- no_tasks[-in_train, ]
 ```
+
+
+```{r}
+logit <- glm(MIPS75_Dr ~ (.)^2, data = training, 
+             family = binomial(link = "logit"))
+no_penalty <- predict(logit, newdata = testing, 
+             type = "response") 
+logit_hat <- predict(logit, newdata = testing, 
+             type = "response") > 0.5
+logit_hat <- factor(logit_hat, levels = c(TRUE, FALSE), 
+            labels = c("no", "yes"), order = T)
+confusionMatrix(logit_hat, testing$MIPS75_Dr)
+
+
+ctrl <- trainControl(method = "cv", number = 3)
+enet <- train(formula(logit), data = training, 
+              method = "glmnet", trControl = ctrl, 
+              tuneLength = 10, preProcess = pp)
+enet_hat <- predict(enet, newdata = testing)
+penalty <- predict(enet, newdata = testing, type = "prob")$yes
+confusionMatrix(enet_hat, reference = testing$MIPS75_Dr)
+
+calibration(MIPS75_Dr ~ (1 - no_penalty) + 
+              penalty, data = testing) %>%
+  plot(., main = "Generalized Linear Model Calibrations")
+```
+
+
+
 
 ```{r, message = F, warning = F}
 logit <- glm(MIPS75_Dr ~ ., data = training, 
